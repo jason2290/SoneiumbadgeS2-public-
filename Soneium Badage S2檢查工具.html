@@ -32,15 +32,22 @@
             display: inline-block;
             margin-top: 10px;
         }
-        #resultTable {
+        /* 新增表格容器樣式 */
+        .table-container {
             width: 100%;
-            border-collapse: collapse;
+            overflow-x: auto; /* 啟用水平滾動 */
             margin-top: 20px;
+        }
+        #resultTable {
+            width: auto; /* 移除固定寬度，讓表格根據內容自動調整 */
+            min-width: 100%; /* 確保表格至少填滿容器 */
+            border-collapse: collapse;
         }
         #resultTable th, #resultTable td {
             border: 1px solid #ddd;
             padding: 8px;
             text-align: center;
+            white-space: nowrap; /* 防止內容換行，保持單行顯示 */
         }
         #resultTable th {
             background-color: #f2f2f2;
@@ -260,7 +267,7 @@
                     const td = document.createElement('td');
                     const count = counts[taskName] || 0;
                     const required = taskCriteria[taskName].required_count;
-                    const status = count >= required ? '已完成' : '未完成';
+                    const status = count >= required ? '完成' : '未完成';
                     td.textContent = `${status} (${count}/${required})`;
                     td.className = count >= required ? 'completed' : 'incomplete';
                     row.appendChild(td);
