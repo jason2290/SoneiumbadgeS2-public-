@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>交易任務檢查工具</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        .container {
+            text-align: center;
+        }
+        button, input[type="file"] {
+            padding: 10px 20px;
+            margin: 10px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        #log {
+            text-align: left;
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .download-link {
+            display: inline-block;
+            margin-top: 10px;
+        }
+        #resultTable {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        #resultTable th, #resultTable td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: center;
+        }
+        #resultTable th {
+            background-color: #f2f2f2;
+        }
+        #resultTable tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .completed {
+            background-color: #e6ffe6; /* 淡綠色 */
+        }
+        .incomplete {
+            background-color: #ffe6e6; /* 淡紅色 */
+        }
+        .address-cell {
+            cursor: pointer;
+            position: relative;
+        }
+        .address-cell:hover::after {
+            content: attr(data-full-address);
+            position: absolute;
+            background-color: #333;
+            color: #fff;
+            padding: 5px;
+            border-radius: 3px;
+            z-index: 1;
+            left: 50%;
+            transform: translateX(-50%);
+            top: -30px;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Soneium Badage S2檢查工具</h1>
+        <p>請載入要查詢地址的CSV檔案</p>
+        
+        <!-- 選擇 CSV 檔案 -->
+        <input type="file" id="csvFile" accept=".csv">
+        <button onclick="processFile()">開始處理</button>
+        
+        <!-- 下載範例 CSV -->
+        <div>
+            <button onclick="downloadSampleCSV()">下載範例 CSV</button>
+        </div>
+        
+        <!-- 處理結果下載連結 -->
+        <div id="downloadResult" class="download-link"></div>
+        
+        <!-- 結果表格 -->
+        <table id="resultTable"></table>
+        
+        <!-- 日誌輸出 -->
+        <div id="log"></div>
+    </div>
+
+    <script>
+        // 配置常量
+        const BASE_URL = "https://soneium.blockscout.com/api/v2";
+        const TIMESTAMP_THRESHOLD = new Date("2025-03-08");
+
+        // 日誌輸出函數
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            logDiv.innerHTML += `${new Date().toLocaleTimeString()} - ${message}<br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        // 下載範例 CSV
+        function downloadSampleCSV() {
+            const sampleData = "address\n0x1234567890abcdef1234567890abcdef12345678\n0xabcdef1234567890abcdef1234567890abcdef12";
+            const blob = new Blob([sampleData], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'sample_address.csv';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            log('範例 CSV 已下載');
+        }
+
+        // 獲取所有交易
+        async function getAllTransactions(address) {
+            log(`開始獲取地址 ${address} 的所有交易...`);
+            let allTransactions = [];
+            let pageCount = 1;
+            let params = { filter: "from" };
+
+            const headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            };
+
+            while (true) {
+                const url = new URL(`${BASE_URL}/addresses/${address}/transactions`);
+                Object.keys(params).forEach(key => url.searchParams.append(key, params[key]));
+
+                try {
+                    const response = await fetch(url, { headers });
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                    const data = await response.json();
+
+                    const pageTransactions = data.items || [];
+                    allTransactions = allTransactions.concat(pageTransactions);
+                    log(`第 ${pageCount} 頁獲取成功，交易數: ${pageTransactions.length}`);
+
+                    if (data.next_page_params) {
+                        params = data.next_page_params;
+                        pageCount++;
+                    } else {
+                        log(`交易數據獲取完成，總共 ${allTransactions.length} 筆交易`);
+                        break;
+                    }
+                } catch (e) {
+                    log(`獲取交易失敗: ${e.message}`);
+                    break;
+                }
+
+                await new Promise(resolve => setTimeout(resolve, 1000)); // 延遲 1 秒
+            }
+            return allTransactions;
+        }
+
+        // 檢查任務完成情況
+        function checkTaskCompletion(transactions, taskCriteria) {
+            const taskCounts = {};
+
+            for (const tx of transactions) {
+                const txTimestampStr = tx.timestamp;
+                if (!txTimestampStr) continue;
+                const txTimestamp = new Date(txTimestampStr);
+                if (txTimestamp <= TIMESTAMP_THRESHOLD) continue;
+
+                for (const [taskName, criteria] of Object.entries(taskCriteria)) {
+                    const toHashList = Array.isArray(criteria.to_hash) ? criteria.to_hash : [criteria.to_hash];
+                    const methodList = Array.isArray(criteria.method) ? criteria.method : [criteria.method];
+                    const skipMethodCheck = methodList.includes('0');
+
+                    // 將交易中的 to.hash 和配置中的 to_hash 都轉為小寫進行比對
+                    const txToHash = tx.to?.hash?.toLowerCase();
+                    const normalizedToHashList = toHashList.map(hash => hash.toLowerCase());
+
+                    if (
+                        tx.result === criteria.result &&
+                        txToHash && normalizedToHashList.includes(txToHash) && // 使用小寫比對
+                        (skipMethodCheck || methodList.includes(tx.method))
+                    ) {
+                        taskCounts[taskName] = (taskCounts[taskName] || 0) + 1;
+                    }
+                }
+            }
+            return taskCounts;
+        }
+        // 生成 CSV 並提供下載
+        function generateCSV(uncompletedTasks) {
+            const fieldnames = ['address', 'task_name', 'result', 'to_hash', 'method', 'count', 'required_count', 'status'];
+            let csvContent = fieldnames.join(',') + '\n';
+
+            for (const [address, tasks] of Object.entries(uncompletedTasks)) {
+                for (const [taskName, data] of Object.entries(tasks)) {
+                    const row = [
+                        address,
+                        taskName,
+                        data.criteria.result,
+                        data.criteria.to_hash,
+                        data.criteria.method,
+                        data.count,
+                        data.criteria.required_count,
+                        '未完成'
+                    ].join(',');
+                    csvContent += row + '\n';
+                }
+            }
+
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const downloadDiv = document.getElementById('downloadResult');
+            downloadDiv.innerHTML = `<a href="${url}" download="output.csv">下載結果 CSV</a>`;
+        }
+
+        // 生成結果表格
+        function generateTable(taskResults, taskCriteria, addresses) {
+            const table = document.getElementById('resultTable');
+            table.innerHTML = '';
+
+            // 表頭
+            const headerRow = document.createElement('tr');
+            const headers = ['地址', ...Object.keys(taskCriteria).map(name => name.replace(/_/g, '<br>'))];
+            headers.forEach((headerText) => {
+                const th = document.createElement('th');
+                th.innerHTML = headerText;
+                headerRow.appendChild(th);
+            });
+            table.appendChild(headerRow);
+
+            // 表格內容，按照 addresses 順序
+            for (const address of addresses) {
+                const row = document.createElement('tr');
+
+                // 地址列（縮短顯示並可複製）
+                const addressCell = document.createElement('td');
+                const shortAddress = `${address.slice(0, 6)}...${address.slice(-4)}`;
+                addressCell.textContent = shortAddress;
+                addressCell.className = 'address-cell';
+                addressCell.setAttribute('data-full-address', address);
+                addressCell.onclick = () => {
+                    navigator.clipboard.writeText(address).then(() => {
+                        log(`已複製地址: ${address}`);
+                    });
+                };
+                row.appendChild(addressCell);
+
+                // 每個任務的狀態
+                const counts = taskResults[address] || {}; // 如果該地址無結果，預設空物件
+                for (const taskName of Object.keys(taskCriteria)) {
+                    const td = document.createElement('td');
+                    const count = counts[taskName] || 0;
+                    const required = taskCriteria[taskName].required_count;
+                    const status = count >= required ? '已完成' : '未完成';
+                    td.textContent = `${status} (${count}/${required})`;
+                    td.className = count >= required ? 'completed' : 'incomplete';
+                    row.appendChild(td);
+                }
+                table.appendChild(row);
+            }
+        }
+
+        // 主處理邏輯
+        async function processFile() {
+            const fileInput = document.getElementById('csvFile');
+            const file = fileInput.files[0];
+            if (!file) {
+                log('請先選擇一個 CSV 檔案');
+                return;
+            }
+
+            log('開始處理檔案: ' + file.name);
+            const text = await file.text();
+            const rows = text.split('\n').map(row => row.trim().split(','));
+            rows.shift(); // 跳過標題行
+
+            const taskCriteria = {
+                'Task2_EverMoon nft': { result: 'success', to_hash: '0x6b2249389dC3Db6B27833279F594910caa6465e7', method: 'claim', required_count: 10 },
+                'Task3_PosseStudio': { result: 'success', to_hash: '0xFF4C94b6D2A89F5CA5FC46A49BE40A42f7352D18', method: '0', required_count: 11 },
+                'Task4_Quickswap': { result: 'success', to_hash: '0xeba58c20629ddab41e21a3E4E2422E583ebD9719', method: 'exactInputSingle', required_count: 10 },
+                'Task5A_Sonus swap': { result: 'success', to_hash: '0xA0133D304c54AB0ba9fBe4468018a5717f460D3a', method: 'swapExactETHForTokens', required_count: 10 },
+                'Task5B_Sonus lock': { result: 'success', to_hash: '0x882Af8BD0A035d4BCEb42DEe8A5A7bC8Ef2F6FF9', method: 'createLock', required_count: 5 },
+                'Task6_BankUntitled': { 
+                    result: 'success', 
+                    to_hash: ['0x2469362f63e9f593087EBbb5AC395CA607B5842F', '0x85A4fB48C7f9383083864D62aBECCDf318fd8E6F', '0xc675BB95D73CA7db2C09c3dC04dAaA7944CCBA41'], 
+                    method: ['supplyCollateral', 'deposit'], 
+                    required_count: 10 
+                },
+                'Task7_Unemeta': { result: 'success', to_hash: '0xbb4904e033Ef5Af3fc5d3D72888f1cAd7944784D', method: '0', required_count: 30 },
+                'Task8_SynStation': { result: 'success', to_hash: '0x1ccaa0c6448ccd836a09f62b1c0b2df76f910424', method: '0', required_count: 30 },
+            };
+
+            const uncompletedTasks = {};
+            const taskResults = {};
+
+            const addresses = rows.map(row => row[0]).filter(address => address);
+            log(`即將並行處理 ${addresses.length} 個地址`);
+            const batchSize = 5; // 每批處理 5 個地址
+
+            for (let i = 0; i < addresses.length; i += batchSize) {
+                const batch = addresses.slice(i, i + batchSize);
+                log(`處理第 ${i / batchSize + 1} 批，共 ${batch.length} 個地址`);
+
+                const transactionPromises = batch.map(async (address) => {
+                    log(`開始處理地址: ${address}`);
+                    const transactions = await getAllTransactions(address);
+                    const taskCounts = checkTaskCompletion(transactions, taskCriteria);
+                    taskResults[address] = taskCounts;
+
+                    for (const [taskName, criteria] of Object.entries(taskCriteria)) {
+                        const count = taskCounts[taskName] || 0;
+                        if (count < criteria.required_count) {
+                            if (!uncompletedTasks[address]) uncompletedTasks[address] = {};
+                            uncompletedTasks[address][taskName] = { criteria, count };
+                            log(`地址 ${address} 任務 ${taskName} 未完成：${count}/${criteria.required_count} (2025-03-08以後)`);
+                        } else {
+                            log(`地址 ${address} 任務 ${taskName} 已完成：${count}/${criteria.required_count} (2025-03-08以後)`);
+                        }
+                    }
+                });
+
+                await Promise.all(transactionPromises);
+            }
+
+            // 生成表格，傳入原始 addresses 確保順序
+            generateTable(taskResults, taskCriteria, addresses);
+
+            // 生成並提供 CSV 下載
+            if (Object.keys(uncompletedTasks).length > 0) {
+                generateCSV(uncompletedTasks);
+                log('未完成任務已生成，請下載結果 CSV');
+            } else {
+                log('所有地址的所有任務均已完成！');
+            }
+        }
+
+    </script>
+</body>
+</html>
