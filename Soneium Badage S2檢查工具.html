@@ -293,7 +293,12 @@
             const taskCriteria = {
                 'Task2_EverMoon nft': { result: 'success', to_hash: '0x6b2249389dC3Db6B27833279F594910caa6465e7', method: 'claim', required_count: 10 },
                 'Task3_PosseStudio': { result: 'success', to_hash: '0xFF4C94b6D2A89F5CA5FC46A49BE40A42f7352D18', method: '0', required_count: 11 },
-                'Task4_Quickswap': { result: 'success', to_hash: '0xeba58c20629ddab41e21a3E4E2422E583ebD9719', method: 'exactInputSingle', required_count: 10 },
+                'Task4_Quickswap': { 
+                    result: 'success', 
+                    to_hash: '0xeba58c20629ddab41e21a3E4E2422E583ebD9719', 
+                    method: ['exactInputSingle', 'multicall'], 
+                    required_count: 10 
+                },
                 'Task5A_Sonus swap': { result: 'success', to_hash: '0xA0133D304c54AB0ba9fBe4468018a5717f460D3a', method: 'swapExactETHForTokens', required_count: 10 },
                 'Task5B_Sonus lock': { result: 'success', to_hash: '0x882Af8BD0A035d4BCEb42DEe8A5A7bC8Ef2F6FF9', method: 'createLock', required_count: 5 },
                 'Task6_BankUntitled': { 
